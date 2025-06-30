@@ -1,7 +1,7 @@
 bl_info = {
     "name": "StrandKit - Hair Card Texture Switcher",
     "author": "Nino Defoq",
-    "version": (1, 0, 9),
+    "version": (1, 0, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps with progress and cancel",
@@ -14,39 +14,35 @@ import gpu
 from gpu.types import GPUVertFormat, GPUVertBuf
 from gpu.shader import from_builtin
 from . import addon_updater_ops
+from .addon_updater_ops import STRANDKIT_OT_update_all
 
 class StrandKitPreferences(bpy.types.AddonPreferences):
     """Demo bare-bones preferences"""
     bl_idname = __package__
 
-    # Addon updater preferences.
-
+    # — existing addon-updater prefs —
     auto_check_update: bpy.props.BoolProperty(
         name="Auto-check for Updates",
         description="If enabled, checks for updates automatically at intervals.",
         default=True,
     )
-
     updater_interval_months: bpy.props.IntProperty(
         name='Months',
         description="Number of months between checking for updates",
         default=0,
         min=0)
-
     updater_interval_days: bpy.props.IntProperty(
         name='Days',
         description="Number of days between checking for updates",
         default=7,
         min=0,
         max=31)
-
     updater_interval_hours: bpy.props.IntProperty(
         name='Hours',
         description="Number of hours between checking for updates",
         default=0,
         min=0,
         max=23)
-
     updater_interval_minutes: bpy.props.IntProperty(
         name='Minutes',
         description="Number of minutes between checking for updates",
@@ -54,27 +50,44 @@ class StrandKitPreferences(bpy.types.AddonPreferences):
         min=0,
         max=59)
 
+    # — new asset-library prefs —
+    repo_owner: bpy.props.StringProperty(
+        name="GitHub Owner",
+        description="Username or organization that owns the StrandKit repo",
+        default="defoqofficial",
+    )
+    repo_name: bpy.props.StringProperty(
+        name="GitHub Repo",
+        description="Name of the repo containing your assets",
+        default="StrandKit",
+    )
+    asset_dir: bpy.props.StringProperty(
+        name="Asset Library Folder",
+        description="Relative path where the .blend and .txt are saved",
+        subtype='DIR_PATH',
+        default="//strandkit_assets/",
+    )
+
     def draw(self, context):
         layout = self.layout
-
-        # Works best if a column, or even just self.layout.
         mainrow = layout.row()
         col = mainrow.column()
 
-        # Updater draw function, could also pass in col as third arg.
+        # Draw the existing updater UI
         addon_updater_ops.update_settings_ui(self, context)
 
-        # Alternate draw function, which is more condensed and can be
-        # placed within an existing draw function. Only contains:
-        #   1) check for update/update now buttons
-        #   2) toggle for auto-check (interval will be equal to what is set above)
-        # addon_updater_ops.update_settings_ui_condensed(self, context, col)
-
-        # Adding another column to help show the above condensed ui as one column
-        # col = mainrow.column()
-        # col.scale_y = 2
-        # ops = col.operator("wm.url_open","Open webpage ")
-        # ops.url=addon_updater_ops.updater.website
+        # Separator before asset settings
+        layout.separator()
+        layout.label(text="StrandKit Asset Library:")
+        layout.prop(self, "repo_owner")
+        layout.prop(self, "repo_name")
+        layout.prop(self, "asset_dir")
+        layout.separator()
+        layout.operator(
+            "strandkit.update_all",
+            text="Update StrandKit + Library",
+            icon='FILE_REFRESH'
+    )
 
 def list_dirs(path):
     try:
@@ -405,10 +418,13 @@ def register():
         print("[INFO] Addon updater operations registered successfully.")
     except Exception as e:
         print(f"[ERROR] Failed to register addon updater operations: {e}")
+    bpy.utils.register_class(STRANDKIT_OT_update_all)
 
 def unregister():
     for c in reversed(classes): bpy.utils.unregister_class(c)
     del bpy.types.Scene.haircard_switcher
+    
+    bpy.utils.unregister_class(STRANDKIT_OT_update_all)
     
     # Unregister addon updater operations
     addon_updater_ops.unregister()
