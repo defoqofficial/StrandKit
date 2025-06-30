@@ -21,7 +21,7 @@
 Implements draw calls, popups, and operators that use the addon_updater.
 """
 
-import os
+import os, json, urllib.request
 import traceback
 
 import bpy
@@ -125,6 +125,76 @@ def get_user_preferences(context=None):
 # Updater operators
 # -----------------------------------------------------------------------------
 
+def get_latest_release(owner, repo):
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    with urllib.request.urlopen(url) as resp:
+        return json.load(resp)
+
+def download_asset(asset_url, dest_path):
+    try:
+        with urllib.request.urlopen(asset_url) as resp, open(dest_path, "wb") as out_f:
+            out_f.write(resp.read())
+        return True
+    except Exception as e:
+        print(f"[StrandKit] Download failed for {asset_url}: {e}")
+        return False
+
+import os
+import json
+import urllib.request
+import bpy
+
+import os
+import json
+import urllib.request
+import bpy
+
+class STRANDKIT_OT_update_all(bpy.types.Operator):
+    """Fetch latest release assets and save them locally"""
+    bl_idname = "strandkit.update_all"
+    bl_label  = "Update StrandKit + Library"
+
+    def execute(self, context):
+        prefs     = context.preferences.addons[__package__].preferences
+        owner     = prefs.repo_owner
+        repo      = prefs.repo_name
+        asset_dir = bpy.path.abspath(prefs.asset_dir)
+        os.makedirs(asset_dir, exist_ok=True)
+
+        print("[StrandKit] ▶︎ Update operator fired")
+        print(f"[StrandKit] owner={owner!r}, repo={repo!r}, asset_dir={asset_dir!r}")
+
+        # fetch release
+        try:
+            url     = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+            release = json.load(urllib.request.urlopen(url))
+        except Exception as e:
+            print("[StrandKit] ERROR fetching release:", e)
+            self.report({'ERROR'}, f"Couldn’t fetch release: {e}")
+            return {'CANCELLED'}
+
+        tag = release.get("tag_name", "<unknown>")
+        print(f"[StrandKit] fetched tag {tag}")
+        print("[StrandKit] assets available:", [a["name"] for a in release["assets"]])
+
+        # download every .blend or .txt asset
+        for asset in release.get("assets", []):
+            name  = asset.get("name", "")
+            lname = name.lower()
+            print(f"[StrandKit] checking asset: {name}")
+            if lname.endswith(".blend") or lname.endswith(".txt"):
+                print(f"[StrandKit] → matched suffix, downloading {name}")
+                dest = os.path.join(asset_dir, name)
+                print(f"[StrandKit] → will save to {dest}")
+                try:
+                    with urllib.request.urlopen(asset["browser_download_url"]) as dl, open(dest, "wb") as f:
+                        f.write(dl.read())
+                    self.report({'INFO'}, f"{name} → {tag}")
+                except Exception as e:
+                    print(f"[StrandKit] ERROR downloading {name}:", e)
+                    self.report({'WARNING'}, f"Failed to download {name}: {e}")
+
+        return {'FINISHED'}
 
 # Simple popup to prompt use to check for update & offer install if available.
 class AddonUpdaterInstallPopup(bpy.types.Operator):
@@ -228,45 +298,47 @@ class AddonUpdaterInstallPopup(bpy.types.Operator):
         return {'FINISHED'}
 
 
-# User preference check-now operator
 class AddonUpdaterCheckNow(bpy.types.Operator):
     bl_label = "Check now for " + updater.addon + " update"
     bl_idname = updater.addon + ".updater_check_now"
-    bl_description = "Check now for an update to the {} addon".format(
-        updater.addon)
+    bl_description = "Check now for an update to the {} addon".format(updater.addon)
     bl_options = {'REGISTER', 'INTERNAL'}
 
     def execute(self, context):
+        # Bail out if updater is in a bad state or already running
         if updater.invalid_updater:
             return {'CANCELLED'}
-
         if updater.async_checking and updater.error is None:
-            # Check already happened.
-            # Used here to just avoid constant applying settings below.
-            # Ignoring if error, to prevent being stuck on the error screen.
             return {'CANCELLED'}
 
-        # apply the UI settings
+        # Apply the UI‐side settings to the updater
         settings = get_user_preferences(context)
         if not settings:
             updater.print_verbose(
-                "Could not get {} preferences, update check skipped".format(
-                    __package__))
+                "Could not get {} preferences, update check skipped".format(__package__)
+            )
             return {'CANCELLED'}
 
         updater.set_check_interval(
-            enabled=settings.auto_check_update,
-            months=settings.updater_interval_months,
-            days=settings.updater_interval_days,
-            hours=settings.updater_interval_hours,
-            minutes=settings.updater_interval_minutes)
+            enabled = settings.auto_check_update,
+            months  = settings.updater_interval_months,
+            days    = settings.updater_interval_days,
+            hours   = settings.updater_interval_hours,
+            minutes = settings.updater_interval_minutes,
+        )
 
-        # Input is an optional callback function. This function should take a
-        # bool input. If true: update ready, if false: no update ready.
-        updater.check_for_update_now(ui_refresh)
+        # Wrap the original UI‐refresh callback so we can chain our asset update
+        def _combined_refresh(update_ready: bool):
+            # First, run the normal UI refresh (this shows the "Update available!" banner)
+            ui_refresh(update_ready)
+            # Then, if a new addon version is available, also update .blend/.txt
+            if update_ready:
+                bpy.ops.strandkit.update_all()
+
+        # Kick off the async check with our combined callback
+        updater.check_for_update_now(_combined_refresh)
 
         return {'FINISHED'}
-
 
 class AddonUpdaterUpdateNow(bpy.types.Operator):
     bl_label = "Update " + updater.addon + " addon now"
@@ -1518,7 +1590,6 @@ def register(bl_info):
     # Special situation: we just updated the addon, show a popup to tell the
     # user it worked. Could enclosed in try/catch in case other issues arise.
     show_reload_popup()
-
 
 def unregister():
     for cls in reversed(classes):
