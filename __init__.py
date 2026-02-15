@@ -1,5 +1,5 @@
 bl_info = {
-    "name": "StrandKit - Hair Card Texture Switcher",
+    "name": "StrandKit | The Hair, Fur & Dynamics Library",
     "author": "Nino Defoq",
     "version": (1, 0, 5),
     "blender": (4, 2, 0),
@@ -649,6 +649,7 @@ def unregister():
     for c in reversed(classes): bpy.utils.unregister_class(c)
 
 if __name__=="__main__": register()
+
 
 
 
