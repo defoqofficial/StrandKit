@@ -41,7 +41,7 @@ class StrandKitPreferences(bpy.types.AddonPreferences):
         options={'HIDDEN'}
     )
     
-    bpy.types.Scene.strandkit_show_swapping = BoolProperty(default=True)
+    bpy.types.Scene.strandkit_show_swapping = BoolProperty(default=False)
     bpy.types.Scene.strandkit_show_baking = BoolProperty(default=True)
     
     bpy.types.Scene.strandkit_show_setup = BoolProperty(
@@ -649,4 +649,5 @@ def unregister():
     for c in reversed(classes): bpy.utils.unregister_class(c)
 
 if __name__=="__main__": register()
+
 
