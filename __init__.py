@@ -1,7 +1,7 @@
 bl_info = {
     "name": "StrandKit - Hair Card Texture Switcher",
     "author": "Nino Defoq",
-    "version": (1, 0, 2),
+    "version": (1, 0, 3),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps.",
@@ -292,22 +292,22 @@ class HAIRCARD_PT_Switcher(bpy.types.Panel):
                 col.prop(props, "material")
                 col.operator("haircard.swap_textures", icon='FILE_REFRESH')
 
-        # --- Baking ---
-        box = layout.box()
-        row = box.row()
-        row.prop(context.scene, "strandkit_show_baking", text="", icon="TRIA_DOWN" if context.scene.strandkit_show_baking else "TRIA_RIGHT", emboss=False)
-        row.label(text="Hair Card Baking")
+#        # --- Baking ---
+#        box = layout.box()
+#        row = box.row()
+#        row.prop(context.scene, "strandkit_show_baking", text="", icon="TRIA_DOWN" if context.scene.strandkit_show_baking else "TRIA_RIGHT", emboss=False)
+#        row.label(text="Hair Card Baking")
 
-        if context.scene.strandkit_show_baking:
-            col = box.column(align=True)
-            if props.bake_width and props.bake_height:
-                col.prop(props, "bake_path")
-                col.operator("haircard.bake_textures", icon='RENDER_STILL')
-                
-                prog = props.bake_progress
-                if 0.0 < prog < 1.0:
-                    col.label(text="Baking textures…")
-                    col.progress(factor=prog, text=f"{int(prog*100)}%")
+#        if context.scene.strandkit_show_baking:
+#            col = box.column(align=True)
+#            if props.bake_width and props.bake_height:
+#                col.prop(props, "bake_path")
+#                col.operator("haircard.bake_textures", icon='RENDER_STILL')
+#                
+#                prog = props.bake_progress
+#                if 0.0 < prog < 1.0:
+#                    col.label(text="Baking textures…")
+#                    col.progress(factor=prog, text=f"{int(prog*100)}%")
 
 # ------------------------------------------------------------------------
 # Operators
