@@ -234,67 +234,67 @@ class STRANDKIT_OT_check_assets(bpy.types.Operator):
     bl_label  = "Check for Updates"
     bl_options = {'REGISTER', 'INTERNAL'}
 
-def execute(self, context):
-        prefs = context.preferences.addons[__package__].preferences
-        try:
-            print("\n[StrandKit] Checking for updates...")
-            token = prefs.github_token.strip()
-            
-            # 1. Fetch latest release from GitHub
-            release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
-            remote_tag = release.get("tag_name", "v0.0.0")
-            
-            # --- CRUCIAAL VOOR DE ASSET KNOP ---
-            prefs.asset_remote_tag = remote_tag
-            # -----------------------------------
+    def execute(self, context):
+            prefs = context.preferences.addons[__package__].preferences
+            try:
+                print("\n[StrandKit] Checking for updates...")
+                token = prefs.github_token.strip()
+                
+                # 1. Fetch latest release from GitHub
+                release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
+                remote_tag = release.get("tag_name", "v0.0.0")
+                
+                # --- CRUCIAAL VOOR DE ASSET KNOP ---
+                prefs.asset_remote_tag = remote_tag
+                # -----------------------------------
 
-            print(f"[StrandKit] GitHub Tag: {remote_tag}")
-            
-            # 2. Prepare versions for comparison
-            remote_clean = remote_tag.lower().lstrip("v").strip()
-            asset_clean  = prefs.asset_last_tag.lower().lstrip("v").strip()
-            
-            # 3. Get Code Version safely
-            code_clean = "0.0.0"
-            if hasattr(updater, "current_version") and updater.current_version:
-                code_tuple = updater.current_version
-                code_clean = ".".join(map(str, code_tuple))
-            
-            print(f"[StrandKit] Installed Assets: {asset_clean}")
-            print(f"[StrandKit] Installed Code:   {code_clean}")
+                print(f"[StrandKit] GitHub Tag: {remote_tag}")
+                
+                # 2. Prepare versions for comparison
+                remote_clean = remote_tag.lower().lstrip("v").strip()
+                asset_clean  = prefs.asset_last_tag.lower().lstrip("v").strip()
+                
+                # 3. Get Code Version safely
+                code_clean = "0.0.0"
+                if hasattr(updater, "current_version") and updater.current_version:
+                    code_tuple = updater.current_version
+                    code_clean = ".".join(map(str, code_tuple))
+                
+                print(f"[StrandKit] Installed Assets: {asset_clean}")
+                print(f"[StrandKit] Installed Code:   {code_clean}")
 
-            # 4. Compare
-            needs_asset_update = (remote_clean != asset_clean)
-            needs_code_update  = (remote_clean != code_clean)
+                # 4. Compare
+                needs_asset_update = (remote_clean != asset_clean)
+                needs_code_update  = (remote_clean != code_clean)
 
-            # --- CRUCIAAL VOOR DE CODE KNOP ---
-            if needs_code_update:
-                updater._update_ready = True
-                updater._update_version = remote_tag
-                # Zoek de zipball url als fallback
-                updater._update_link = release.get("zipball_url") or release.get("assets")[0].get("browser_download_url")
-            # ----------------------------------
+                # --- CRUCIAAL VOOR DE CODE KNOP ---
+                if needs_code_update:
+                    updater._update_ready = True
+                    updater._update_version = remote_tag
+                    # Zoek de zipball url als fallback
+                    updater._update_link = release.get("zipball_url") or release.get("assets")[0].get("browser_download_url")
+                # ----------------------------------
 
-            # 5. Set Status Message
-            if needs_asset_update and needs_code_update:
-                msg = f"Major Update Available: {remote_tag} (Code & Assets)"
-            elif needs_code_update:
-                msg = f"Addon Code Update Available: {remote_tag}"
-            elif needs_asset_update:
-                msg = f"Asset Library Update Available: {remote_tag}"
-            else:
-                msg = f"Up to date ({remote_tag})"
+                # 5. Set Status Message
+                if needs_asset_update and needs_code_update:
+                    msg = f"Major Update Available: {remote_tag} (Code & Assets)"
+                elif needs_code_update:
+                    msg = f"Addon Code Update Available: {remote_tag}"
+                elif needs_asset_update:
+                    msg = f"Asset Library Update Available: {remote_tag}"
+                else:
+                    msg = f"Up to date ({remote_tag})"
 
-            prefs.asset_status = msg
-            self.report({'INFO'}, msg)
-            
-        except Exception as e:
-            print(f"[StrandKit] Error: {e}")
-            traceback.print_exc()
-            prefs.asset_status = f"Check failed: {e}"
-            self.report({'ERROR'}, str(e))
-            
-        return {'FINISHED'}
+                prefs.asset_status = msg
+                self.report({'INFO'}, msg)
+                
+            except Exception as e:
+                print(f"[StrandKit] Error: {e}")
+                traceback.print_exc()
+                prefs.asset_status = f"Check failed: {e}"
+                self.report({'ERROR'}, str(e))
+                
+            return {'FINISHED'}
 
 # ── hard‐coded GitHub repo ──
 STRANDKIT_OWNER = "defoqofficial"
