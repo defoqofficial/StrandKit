@@ -1,7 +1,7 @@
 bl_info = {
     "name": "StrandKit - Hair Card Texture Switcher",
     "author": "Nino Defoq",
-    "version": (1, 0, 3),
+    "version": (1, 0, 2),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps.",
@@ -12,9 +12,11 @@ import bpy
 import shutil
 import os
 import gpu
+import urllib.request
+import json  # <--- Added json import which is needed for the check_assets operator
 from gpu.types import GPUVertFormat, GPUVertBuf
 from gpu.shader import from_builtin
-from bpy.app.handlers import persistent  # <--- ADD THIS LINE HERE
+from bpy.app.handlers import persistent
 from . import addon_updater_ops
 from bpy.props import (
     BoolProperty,
@@ -225,13 +227,27 @@ class HAIRCARD_PT_Switcher(bpy.types.Panel):
             sub.scale_y = 0.8
             sub.label(text=f"Status: {prefs.asset_status}")
 
+            # --- Asset Update Knop ---
             if prefs.asset_remote_tag and prefs.asset_remote_tag != prefs.asset_last_tag:
-                op = col.operator("strandkit.download_assets_progress", text=f"Download ({prefs.asset_remote_tag})", icon='FILE_REFRESH')
+                op = col.operator("strandkit.download_assets_progress", text=f"Download Assets ({prefs.asset_remote_tag})", icon='FILE_REFRESH')
                 op.github_token = prefs.github_token
                 op.asset_dir = prefs.asset_dir
             else:
                 col.label(text="Library Up to Date", icon='CHECKMARK')
 
+            col.separator()
+
+            # --- Code Update Knop ---
+            from .addon_updater_ops import updater
+            
+            if updater.update_ready:
+                col.alert = True
+                col.operator("strandkit_updater.updater_update_now", text=f"Update Addon Code to {updater.update_version}", icon='IMPORT')
+                col.alert = False
+            elif updater.async_checking:
+                col.label(text="Checking for code updates...", icon='FILE_REFRESH')
+
+            # --- Download Progress Bar ---
             prog = prefs.asset_download_progress
             if 0.0 < prog < 1.0:
                 col.label(text="Downloading...")
@@ -239,9 +255,8 @@ class HAIRCARD_PT_Switcher(bpy.types.Panel):
 
             col.separator()
             
-            # --- Check if already registered ---
+            # --- Library Registration Check ---
             is_registered = False
-            # Normalize paths for accurate comparison
             abs_dir = os.path.normpath(os.path.abspath(bpy.path.abspath(prefs.asset_dir)))
             
             for lib in context.preferences.filepaths.asset_libraries:
@@ -592,7 +607,15 @@ class HAIRCARD_OT_BakeTextures(bpy.types.Operator):
             self.bake_phase = 'SETUP'
             return {'RUNNING_MODAL'}
 
-classes = (HairCardSwitcherProperties, HAIRCARD_PT_Switcher, HAIRCARD_OT_SwapTextures, HAIRCARD_OT_BakeTextures, StrandKitPreferences)
+
+# --- IMPORTANT: Classes tuple moved AFTER all class definitions ---
+classes = (
+    HairCardSwitcherProperties, 
+    HAIRCARD_PT_Switcher, 
+    HAIRCARD_OT_SwapTextures, 
+    HAIRCARD_OT_BakeTextures, 
+    StrandKitPreferences
+)
 
 @persistent
 def _strahkit_reset_progress(dummy):
