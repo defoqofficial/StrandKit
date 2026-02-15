@@ -1,7 +1,7 @@
 bl_info = {
     "name": "StrandKit - Hair Card Texture Switcher",
     "author": "Nino Defoq",
-    "version": (1, 0, 3),
+    "version": (1, 0, 5),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps.",
@@ -649,5 +649,6 @@ def unregister():
     for c in reversed(classes): bpy.utils.unregister_class(c)
 
 if __name__=="__main__": register()
+
 
 
