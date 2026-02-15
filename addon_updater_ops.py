@@ -21,21 +21,25 @@
 Implements draw calls, popups, and operators that use the addon_updater.
 """
 
-import os, json, urllib.request
+import os
+import json
+import urllib.request
+import urllib.error
 import traceback
-
 import bpy
 from bpy.app.handlers import persistent
+from bpy.props import StringProperty, FloatProperty
+import gpu
+from gpu.types import GPUVertFormat, GPUVertBuf
+from gpu.shader import from_builtin
 
 # Safely import the updater.
-# Prevents popups for users with invalid python installs e.g. missing libraries
-# and will replace with a fake class instead if it fails (so UI draws work).
 try:
     from .addon_updater import Updater as updater
 except Exception as e:
     print("ERROR INITIALIZING UPDATER")
-    print(str(e))
     traceback.print_exc()
+    # ... (SingletonUpdaterNone class remains the same)
 
     class SingletonUpdaterNone(object):
         """Fake, bare minimum fields and functions for the updater object."""
@@ -125,77 +129,344 @@ def get_user_preferences(context=None):
 # Updater operators
 # -----------------------------------------------------------------------------
 
-def get_latest_release(owner, repo):
-    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
-    with urllib.request.urlopen(url) as resp:
-        return json.load(resp)
+STRANDKIT_OWNER = "defoqofficial"
+STRANDKIT_REPO  = "StrandKit"
 
-def download_asset(asset_url, dest_path):
+def get_latest_release(owner: str, repo: str, token: str = "") -> dict:
+    """
+    Fetch the latest GitHub release JSON for owner/repo.
+    If `token` is non-empty, authenticates to avoid rate-limit errors.
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"token {token.strip()}")
     try:
-        with urllib.request.urlopen(asset_url) as resp, open(dest_path, "wb") as out_f:
+        with urllib.request.urlopen(req) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            raise RuntimeError("GitHub rate limit exceeded (use a personal access token).")
+        raise
+
+def download_asset(asset_url: str, dest_path: str, token: str = "") -> bool:
+    """
+    Download a single asset from GitHub, using token if provided to
+    avoid rate‐limit issues.
+    """
+    req = urllib.request.Request(asset_url)
+    if token:
+        req.add_header("Authorization", f"token {token.strip()}")
+    try:
+        with urllib.request.urlopen(req) as resp, open(dest_path, "wb") as out_f:
             out_f.write(resp.read())
         return True
+    except urllib.error.HTTPError as e:
+        print(f"[StrandKit] HTTP error {e.code} downloading {asset_url}: {e}")
     except Exception as e:
         print(f"[StrandKit] Download failed for {asset_url}: {e}")
-        return False
+    return False
 
-import os
-import json
-import urllib.request
-import bpy
-
-import os
-import json
-import urllib.request
-import bpy
+def _fetch_json(url, token):
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"token {token}")
+    with urllib.request.urlopen(req) as resp:
+        return json.load(resp)
 
 class STRANDKIT_OT_update_all(bpy.types.Operator):
-    """Fetch latest release assets and save them locally"""
+    """Download the asset library now and update status"""
     bl_idname = "strandkit.update_all"
-    bl_label  = "Update StrandKit + Library"
+    bl_label  = "Download Asset Library Now"
+    bl_options = {'REGISTER', 'INTERNAL'}
 
     def execute(self, context):
         prefs     = context.preferences.addons[__package__].preferences
-        owner     = prefs.repo_owner
-        repo      = prefs.repo_name
+        # hard-coded repo instead of prefs.repo_owner/prefs.repo_name
+        owner     = STRANDKIT_OWNER
+        repo      = STRANDKIT_REPO
+        token     = prefs.github_token.strip()
         asset_dir = bpy.path.abspath(prefs.asset_dir)
         os.makedirs(asset_dir, exist_ok=True)
 
-        print("[StrandKit] ▶︎ Update operator fired")
-        print(f"[StrandKit] owner={owner!r}, repo={repo!r}, asset_dir={asset_dir!r}")
-
-        # fetch release
+        # 1) Fetch the latest release (authenticated if token given)
         try:
-            url     = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
-            release = json.load(urllib.request.urlopen(url))
+            release = get_latest_release(owner, repo, token)
+        except RuntimeError as e:
+            self.report({'ERROR'}, str(e))
+            prefs.asset_status = str(e)
+            return {'CANCELLED'}
         except Exception as e:
-            print("[StrandKit] ERROR fetching release:", e)
-            self.report({'ERROR'}, f"Couldn’t fetch release: {e}")
+            msg = f"Couldn’t fetch release: {e}"
+            self.report({'ERROR'}, msg)
+            prefs.asset_status = msg
             return {'CANCELLED'}
 
-        tag = release.get("tag_name", "<unknown>")
-        print(f"[StrandKit] fetched tag {tag}")
-        print("[StrandKit] assets available:", [a["name"] for a in release["assets"]])
+        tag = release.get("tag_name", "")
+        downloaded_any = False
 
-        # download every .blend or .txt asset
+        # 2) Download all .blend/.txt assets
         for asset in release.get("assets", []):
-            name  = asset.get("name", "")
+            name = asset.get("name", "")
             lname = name.lower()
-            print(f"[StrandKit] checking asset: {name}")
             if lname.endswith(".blend") or lname.endswith(".txt"):
-                print(f"[StrandKit] → matched suffix, downloading {name}")
                 dest = os.path.join(asset_dir, name)
-                print(f"[StrandKit] → will save to {dest}")
-                try:
-                    with urllib.request.urlopen(asset["browser_download_url"]) as dl, open(dest, "wb") as f:
-                        f.write(dl.read())
+                ok = download_asset(asset["browser_download_url"], dest, token)
+                if ok:
                     self.report({'INFO'}, f"{name} → {tag}")
-                except Exception as e:
-                    print(f"[StrandKit] ERROR downloading {name}:", e)
-                    self.report({'WARNING'}, f"Failed to download {name}: {e}")
+                    downloaded_any = True
+                else:
+                    self.report({'WARNING'}, f"Failed to download {name}")
+
+        # 3) Update prefs only if we actually downloaded
+        if downloaded_any:
+            prefs.asset_last_tag = tag
+            prefs.asset_status   = f"Updated → {tag}"
+        else:
+            # nothing new (or nothing matched)
+            prefs.asset_status = f"No assets downloaded (already at {prefs.asset_last_tag})"
 
         return {'FINISHED'}
+                
+class STRANDKIT_OT_check_assets(bpy.types.Operator):
+    """Check GitHub for updates (compares both Code and Assets)"""
+    bl_idname = "strandkit.check_assets"
+    bl_label  = "Check for Updates"
+    bl_options = {'REGISTER', 'INTERNAL'}
 
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+        try:
+            print("\n[StrandKit] Checking for updates...")
+            token = prefs.github_token.strip()
+            
+            # 1. Fetch latest release from GitHub
+            release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
+            remote_tag = release.get("tag_name", "v0.0.0")
+            print(f"[StrandKit] GitHub Tag: {remote_tag}")
+            
+            # 2. Prepare versions for comparison
+            # Remove 'v', spaces, and ensure string format
+            remote_clean = remote_tag.lower().lstrip("v").strip()
+            asset_clean  = prefs.asset_last_tag.lower().lstrip("v").strip()
+            
+            # 3. Get Code Version safely
+            code_clean = "0.0.0"
+            # Check if updater has the version set, otherwise default to 0.0.0
+            if hasattr(updater, "current_version") and updater.current_version:
+                code_tuple = updater.current_version
+                code_clean = ".".join(map(str, code_tuple))
+            
+            print(f"[StrandKit] Installed Assets: {asset_clean}")
+            print(f"[StrandKit] Installed Code:   {code_clean}")
+
+            # 4. Compare
+            needs_asset_update = (remote_clean != asset_clean)
+            needs_code_update  = (remote_clean != code_clean)
+
+            # 5. Set Status Message
+            if needs_asset_update and needs_code_update:
+                msg = f"Major Update Available: {remote_tag} (Code & Assets)"
+            elif needs_code_update:
+                msg = f"Addon Code Update Available: {remote_tag}"
+            elif needs_asset_update:
+                msg = f"Asset Library Update Available: {remote_tag}"
+            else:
+                msg = f"Up to date ({remote_tag})"
+
+            prefs.asset_status = msg
+            self.report({'INFO'}, msg)
+            
+        except Exception as e:
+            print(f"[StrandKit] Error: {e}")
+            traceback.print_exc()
+            prefs.asset_status = f"Check failed: {e}"
+            self.report({'ERROR'}, str(e))
+            
+        return {'FINISHED'}
+
+# ── hard‐coded GitHub repo ──
+STRANDKIT_OWNER = "defoqofficial"
+STRANDKIT_REPO  = "StrandKit"
+
+class STRANDKIT_OT_download_assets_progress(bpy.types.Operator):
+    """Download .blend + .txt assets, updating prefs so the UI hides the button when done"""
+    bl_idname = "strandkit.download_assets_progress"
+    bl_label  = "Download Asset Library Now"
+    bl_options = {'REGISTER', 'INTERNAL'}
+
+    github_token: StringProperty(subtype='PASSWORD')
+    asset_dir:    StringProperty(subtype='DIR_PATH')
+
+    def invoke(self, context, event):
+        prefs = context.preferences.addons[__package__].preferences
+        prefs.asset_download_progress = 0.0
+
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        self._area = context.area
+
+        # Initialize state for modal
+        self._phase = 0
+        self._assets = []
+        self._total = 0
+        self._downloaded = 0
+        self._asset_idx = 0
+        self._chunk_size = 8192  # 8 KB per chunk read — can increase if needed
+        self._resp = None
+        self._fp = None
+
+        wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _start_next_asset(self, prefs):
+        asset = self._assets[self._asset_idx]
+        dl_url = asset["browser_download_url"]
+        req = urllib.request.Request(dl_url)
+        token = self.github_token.strip()
+        if token:
+            req.add_header("Authorization", f"token {token}")
+        resp = urllib.request.urlopen(req)
+
+        abs_dir = bpy.path.abspath(self.asset_dir)
+        os.makedirs(abs_dir, exist_ok=True)
+        out_path = os.path.join(abs_dir, asset["name"])
+        fp = open(out_path, "wb")
+
+        self._resp = resp
+        self._fp   = fp
+        self.report({'INFO'}, f"Downloading {asset['name']}")
+
+    def modal(self, context, event):
+        prefs = context.preferences.addons[__package__].preferences
+        wm = context.window_manager
+
+        if event.type == 'TIMER':
+            # Phase 0: fetch release + build asset list
+            if self._phase == 0:
+                try:
+                    url = f"https://api.github.com/repos/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/releases/latest"
+                    req = urllib.request.Request(url)
+                    token = self.github_token.strip()
+                    if token:
+                        req.add_header("Authorization", f"token {token}")
+                    with urllib.request.urlopen(req) as resp:
+                        release = json.load(resp)
+
+                    tag = release.get("tag_name", "")
+                    prefs.asset_remote_tag = tag
+
+                    self._assets = [
+                        a for a in release["assets"]
+                        if a["name"].lower().endswith((".blend", ".txt"))
+                    ]
+                    self._total = sum(a.get("size", 0) for a in self._assets)
+
+                    if not self._assets:
+                        self.report({'WARNING'}, "No .blend/.txt assets found")
+                        wm.event_timer_remove(self._timer)
+                        return {'CANCELLED'}
+
+                    self._start_next_asset(prefs)
+                    self._phase = 1
+
+                except Exception as e:
+                    wm.event_timer_remove(self._timer)
+                    prefs.asset_download_progress = 0.0
+                    self.report({'ERROR'}, f"Setup failed: {e}")
+                    return {'CANCELLED'}
+
+                return {'RUNNING_MODAL'}
+
+            # Phase 1: download current asset in chunks (optimized)
+            if self._phase == 1:
+                try:
+                    bytes_this_tick = 0
+                    max_per_tick = 16 * 1024 * 1024  # 16 MiB
+
+                    while bytes_this_tick < max_per_tick:
+                        chunk = self._resp.read(self._chunk_size)
+                        if not chunk:
+                            self._fp.close()
+                            self.report({'INFO'}, f"Completed {self._assets[self._asset_idx]['name']}")
+                            self._asset_idx += 1
+
+                            if self._asset_idx < len(self._assets):
+                                self._start_next_asset(prefs)
+                                return {'RUNNING_MODAL'}
+                            else:
+                                wm.event_timer_remove(self._timer)
+                                prefs.downloaded_asset_files = ";".join([a["name"] for a in self._assets])
+                                prefs.asset_download_progress = 1.0
+                                prefs.asset_last_tag = prefs.asset_remote_tag
+                                prefs.asset_status = f"Up to date ({prefs.asset_last_tag})"
+                                self.report({'INFO'}, "All assets downloaded")
+                                return {'FINISHED'}
+
+                        self._fp.write(chunk)
+                        n = len(chunk)
+                        self._downloaded += n
+                        bytes_this_tick += n
+
+                        if n < self._chunk_size:
+                            break  # no more data right now
+
+                except Exception as e:
+                    self._fp.close()
+                    wm.event_timer_remove(self._timer)
+                    prefs.asset_download_progress = 0.0
+                    self.report({'ERROR'}, f"Download error: {e}")
+                    return {'CANCELLED'}
+
+                # update progress bar
+                if self._total:
+                    prefs.asset_download_progress = self._downloaded / self._total
+                else:
+                    prefs.asset_download_progress = 0.0
+
+                self._area.tag_redraw()
+
+        return {'PASS_THROUGH'}
+    
+class STRANDKIT_OT_setup_asset_library(bpy.types.Operator):
+    """Add the StrandKit folder as a Blender Asset Library with Append set as default"""
+    bl_idname = "strandkit.setup_asset_library"
+    bl_label  = "Register Asset Library"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+        abs_dir = bpy.path.abspath(prefs.asset_dir)
+        
+        # Ensure directory exists before registering
+        if not os.path.isdir(abs_dir):
+            self.report({'ERROR'}, "Library path does not exist. Download assets first.")
+            return {'CANCELLED'}
+
+        # Check if already registered to avoid duplicates
+        for lib in context.preferences.filepaths.asset_libraries:
+            if os.path.abspath(bpy.path.abspath(lib.path)) == os.path.abspath(abs_dir):
+                # Ensure settings are correct even if already registered
+                lib.import_method = 'APPEND'
+                self.report({'INFO'}, "Library already registered (Import Method set to Append).")
+                return {'CANCELLED'}
+
+        # Add the directory as a new Asset Library
+        bpy.ops.preferences.asset_library_add(directory=abs_dir)
+
+        # Get the newly created library (it is always the last index -1)
+        new_lib = context.preferences.filepaths.asset_libraries[-1]
+        
+        # Set Name
+        new_lib.name = "StrandKit | The Ultimate Hair & Fur Library"
+        
+        # Set Default Import Method to APPEND
+        # Options: 'LINK', 'APPEND', 'APPEND_REUSE'
+        new_lib.import_method = 'APPEND'
+
+        self.report({'INFO'}, f"Registered: {abs_dir} (Default: Append)")
+        return {'FINISHED'}
+    
 # Simple popup to prompt use to check for update & offer install if available.
 class AddonUpdaterInstallPopup(bpy.types.Operator):
     """Check and install update if available"""
@@ -299,23 +570,21 @@ class AddonUpdaterInstallPopup(bpy.types.Operator):
 
 
 class AddonUpdaterCheckNow(bpy.types.Operator):
-    bl_label = "Check now for " + updater.addon + " update"
-    bl_idname = updater.addon + ".updater_check_now"
+    bl_label       = "Check now for " + updater.addon + " update"
+    bl_idname      = updater.addon + ".updater_check_now"
     bl_description = "Check now for an update to the {} addon".format(updater.addon)
-    bl_options = {'REGISTER', 'INTERNAL'}
+    bl_options     = {'REGISTER', 'INTERNAL'}
 
     def execute(self, context):
-        # Bail out if updater is in a bad state or already running
         if updater.invalid_updater:
             return {'CANCELLED'}
         if updater.async_checking and updater.error is None:
             return {'CANCELLED'}
 
-        # Apply the UI‐side settings to the updater
         settings = get_user_preferences(context)
         if not settings:
             updater.print_verbose(
-                "Could not get {} preferences, update check skipped".format(__package__)
+                f"Could not get {__package__} preferences, update check skipped"
             )
             return {'CANCELLED'}
 
@@ -327,17 +596,8 @@ class AddonUpdaterCheckNow(bpy.types.Operator):
             minutes = settings.updater_interval_minutes,
         )
 
-        # Wrap the original UI‐refresh callback so we can chain our asset update
-        def _combined_refresh(update_ready: bool):
-            # First, run the normal UI refresh (this shows the "Update available!" banner)
-            ui_refresh(update_ready)
-            # Then, if a new addon version is available, also update .blend/.txt
-            if update_ready:
-                bpy.ops.strandkit.update_all()
-
-        # Kick off the async check with our combined callback
-        updater.check_for_update_now(_combined_refresh)
-
+        # ONLY run the built-in code updater here
+        updater.check_for_update_now(ui_refresh)
         return {'FINISHED'}
 
 class AddonUpdaterUpdateNow(bpy.types.Operator):
@@ -1400,7 +1660,11 @@ classes = (
     AddonUpdaterUpdatedSuccessful,
     AddonUpdaterRestoreBackup,
     AddonUpdaterIgnore,
-    AddonUpdaterEndBackground
+    AddonUpdaterEndBackground,
+    STRANDKIT_OT_update_all,
+    STRANDKIT_OT_check_assets,
+    STRANDKIT_OT_download_assets_progress,
+    STRANDKIT_OT_setup_asset_library,
 )
 
 
