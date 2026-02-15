@@ -205,12 +205,16 @@ class HAIRCARD_PT_Switcher(bpy.types.Panel):
     bl_category = 'StrandKit'
 
     def draw(self, context):
-        if "StrandKit" in bpy.context.preferences.addons:
+        # FIX: Gebruik __package__ in plaats van hardcoded "StrandKit"
+        # Hierdoor werkt het ook als de map "StrandKit-main" of "StrandKit-1.0.3" heet.
+        if __package__ in bpy.context.preferences.addons:
             verify_asset_library()
             
         layout = self.layout
         props = context.scene.haircard_switcher
-        prefs = context.preferences.addons['StrandKit'].preferences
+        
+        # FIX: Ook hier __package__ gebruiken om de Key Error te voorkomen
+        prefs = context.preferences.addons[__package__].preferences
 
         # --- Setup / Updates ---
         box = layout.box()
@@ -292,22 +296,22 @@ class HAIRCARD_PT_Switcher(bpy.types.Panel):
                 col.prop(props, "material")
                 col.operator("haircard.swap_textures", icon='FILE_REFRESH')
 
-#        # --- Baking ---
-#        box = layout.box()
-#        row = box.row()
-#        row.prop(context.scene, "strandkit_show_baking", text="", icon="TRIA_DOWN" if context.scene.strandkit_show_baking else "TRIA_RIGHT", emboss=False)
-#        row.label(text="Hair Card Baking")
+        # --- Baking (DISABLED FOR NOW) ---
+        # box = layout.box()
+        # row = box.row()
+        # row.prop(context.scene, "strandkit_show_baking", text="", icon="TRIA_DOWN" if context.scene.strandkit_show_baking else "TRIA_RIGHT", emboss=False)
+        # row.label(text="Hair Card Baking")
 
-#        if context.scene.strandkit_show_baking:
-#            col = box.column(align=True)
-#            if props.bake_width and props.bake_height:
-#                col.prop(props, "bake_path")
-#                col.operator("haircard.bake_textures", icon='RENDER_STILL')
-#                
-#                prog = props.bake_progress
-#                if 0.0 < prog < 1.0:
-#                    col.label(text="Baking textures…")
-#                    col.progress(factor=prog, text=f"{int(prog*100)}%")
+        # if context.scene.strandkit_show_baking:
+        #     col = box.column(align=True)
+        #     if props.bake_width and props.bake_height:
+        #         col.prop(props, "bake_path")
+        #         col.operator("haircard.bake_textures", icon='RENDER_STILL')
+        #         
+        #         prog = props.bake_progress
+        #         if 0.0 < prog < 1.0:
+        #             col.label(text="Baking textures…")
+        #             col.progress(factor=prog, text=f"{int(prog*100)}%")
 
 # ------------------------------------------------------------------------
 # Operators
@@ -645,3 +649,4 @@ def unregister():
     for c in reversed(classes): bpy.utils.unregister_class(c)
 
 if __name__=="__main__": register()
+
