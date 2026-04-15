@@ -1,7 +1,7 @@
 bl_info = {
     "name": "StrandKit | The Hair, Fur & Dynamics Library",
     "author": "Nino Defoq",
-    "version": (1, 0, 5),
+    "version": (1, 0, 6),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps.",
@@ -337,47 +337,56 @@ class HAIRCARD_OT_SwapTextures(bpy.types.Operator):
     bl_description = "Swap textures based on selected folders and detect bake size"
 
     def execute(self, context):
-        props = context.scene.haircard_switcher
-        folder = os.path.join(bpy.path.abspath(props.base_path), props.hair_type, props.color, props.thickness, props.density)
-        expected = {t:None for t in ["Diffuse","Roughness","Specular","Normal","Depth","Startmask"]}
-        
-        if not os.path.exists(folder):
-            self.report({'ERROR'}, "Path does not exist")
-            return {'CANCELLED'}
+            props = context.scene.haircard_switcher
+            folder = os.path.join(bpy.path.abspath(props.base_path), props.hair_type, props.color, props.thickness, props.density)
+            expected = {t:None for t in ["Diffuse","Roughness","Specular","Normal","Depth","Startmask"]}
+            
+            if not os.path.exists(folder):
+                self.report({'ERROR'}, "Path does not exist")
+                return {'CANCELLED'}
 
-        for f in os.listdir(folder):
-            for k in expected:
-                if k.lower() in f.lower():
-                    expected[k] = os.path.join(folder, f)
-                    break
-        
-        mat = props.material
-        if not mat or not mat.use_nodes:
-            self.report({'ERROR'}, "No valid material selected.")
-            return {'CANCELLED'}
-        
-        cnt = 0
-        for node in mat.node_tree.nodes:
-            if node.type=='TEX_IMAGE' and node.label in expected:
-                fp = expected[node.label]
-                if fp and os.path.exists(fp):
-                    try:
-                        node.image = bpy.data.images.load(fp, check_existing=True)
-                        if node.label == 'Diffuse':
-                             node.image.colorspace_settings.name = 'sRGB'
-                        else:
-                             node.image.colorspace_settings.name = 'Non-Color'
-                        cnt += 1
-                        if node.label == 'Diffuse':
-                            props.bake_width, props.bake_height = node.image.size
-                            self.report({'INFO'},f"Bake size updated: {props.bake_width}×{props.bake_height}")
-                    except Exception as e:
-                        self.report({'WARNING'},f"Failed load {fp}: {e}")
-        
-        self.report({'INFO'}, f"Swapped {cnt} textures.")
-        return {'FINISHED'}
-
-
+            # Map actual files in the folder to our expected keys
+            for f in os.listdir(folder):
+                for k in expected:
+                    if k.lower() in f.lower():
+                        expected[k] = os.path.join(folder, f)
+                        break
+            
+            mat = props.material
+            if not mat or not mat.use_nodes:
+                self.report({'ERROR'}, "No valid material selected.")
+                return {'CANCELLED'}
+            
+            cnt = 0
+            for node in mat.node_tree.nodes:
+                if node.type == 'TEX_IMAGE':
+                    # Check label first, fallback to name, make lowercase for safe matching
+                    node_id = (node.label or node.name).lower()
+                    
+                    # Find which 'expected' key matches this node's ID
+                    matched_key = next((k for k in expected if k.lower() in node_id), None)
+                    
+                    if matched_key:
+                        fp = expected[matched_key]
+                        if fp and os.path.exists(fp):
+                            try:
+                                node.image = bpy.data.images.load(fp, check_existing=True)
+                                
+                                # Set colorspace
+                                if matched_key == 'Diffuse':
+                                     node.image.colorspace_settings.name = 'sRGB'
+                                     # Update bake dimensions based on diffuse map
+                                     props.bake_width, props.bake_height = node.image.size
+                                else:
+                                     node.image.colorspace_settings.name = 'Non-Color'
+                                
+                                cnt += 1
+                            except Exception as e:
+                                self.report({'WARNING'}, f"Failed to load {fp}: {e}")
+            
+            self.report({'INFO'}, f"Swapped {cnt} textures.")
+            return {'FINISHED'}
+    
 class HAIRCARD_OT_BakeTextures(bpy.types.Operator):
     bl_idname = "haircard.bake_textures"
     bl_label = "Bake Hair Card Maps"
