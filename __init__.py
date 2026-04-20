@@ -1,7 +1,7 @@
 bl_info = {
     "name": "StrandKit | The Hair, Fur & Dynamics Library",
     "author": "Nino Defoq",
-    "version": (1, 0, 7),
+    "version": (1, 0, 8),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps.",
