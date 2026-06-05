@@ -240,50 +240,75 @@ class STRANDKIT_OT_check_assets(bpy.types.Operator):
                 print("\n[StrandKit] Checking for updates...")
                 token = prefs.github_token.strip()
                 
-                # 1. Fetch latest release from GitHub
+                # 1. Fetch latest release from GitHub (strictly for Assets)
                 release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
                 remote_tag = release.get("tag_name", "v0.0.0")
-                
-                # --- CRUCIAAL VOOR DE ASSET KNOP ---
                 prefs.asset_remote_tag = remote_tag
-                # -----------------------------------
 
-                print(f"[StrandKit] GitHub Tag: {remote_tag}")
+                print(f"[StrandKit] GitHub Asset Tag: {remote_tag}")
                 
                 # 2. Prepare versions for comparison
                 remote_clean = remote_tag.lower().lstrip("v").strip()
                 asset_clean  = prefs.asset_last_tag.lower().lstrip("v").strip()
                 
-                # 3. Get Code Version safely
-                code_clean = "0.0.0"
+                # 3. Get Local Code Version safely
+                code_tuple = (0, 0, 0)
                 if hasattr(updater, "current_version") and updater.current_version:
                     code_tuple = updater.current_version
-                    code_clean = ".".join(map(str, code_tuple))
+                code_clean = ".".join(map(str, code_tuple))
                 
                 print(f"[StrandKit] Installed Assets: {asset_clean}")
                 print(f"[StrandKit] Installed Code:   {code_clean}")
 
+                # --- NEW: FETCH TRUE REMOTE CODE VERSION FROM __init__.py ---
+                remote_code_tuple = code_tuple
+                chosen_branch = "main"
+                
+                for branch in ["main", "master"]:
+                    url = f"https://raw.githubusercontent.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/{branch}/__init__.py"
+                    req = urllib.request.Request(url)
+                    if token:
+                        req.add_header("Authorization", f"token {token}")
+                    try:
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            content = resp.read().decode('utf-8')
+                            import re
+                            # Regex to match the tuple inside "version": (x, y, z)
+                            match = re.search(r'"version"\s*:\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', content)
+                            if match:
+                                remote_code_tuple = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                                chosen_branch = branch
+                                break
+                    except Exception:
+                        continue
+
+                remote_code_clean = ".".join(map(str, remote_code_tuple))
+                print(f"[StrandKit] Remote Code Version: {remote_code_clean} (via branch: {chosen_branch})")
+
                 # 4. Compare
                 needs_asset_update = (remote_clean != asset_clean)
-                needs_code_update  = (remote_clean != code_clean)
+                needs_code_update  = (remote_code_tuple > code_tuple)
 
-                # --- CRUCIAAL VOOR DE CODE KNOP ---
+                # --- MANAGE CODE UPDATE BUTTON STATE ---
                 if needs_code_update:
                     updater._update_ready = True
-                    updater._update_version = remote_tag
-                    # Zoek de zipball url als fallback
-                    updater._update_link = release.get("zipball_url") or release.get("assets")[0].get("browser_download_url")
-                # ----------------------------------
+                    updater._update_version = remote_code_clean
+                    updater._update_link = f"https://github.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/archive/refs/heads/{chosen_branch}.zip"
+                else:
+                    updater._update_ready = False
+                    updater._update_version = None
+                    updater._update_link = None
+                # ---------------------------------------
 
                 # 5. Set Status Message
                 if needs_asset_update and needs_code_update:
-                    msg = f"Major Update Available: {remote_tag} (Code & Assets)"
+                    msg = f"Updates Available: Assets ({remote_tag}) & Code (v{remote_code_clean})"
                 elif needs_code_update:
-                    msg = f"Addon Code Update Available: {remote_tag}"
+                    msg = f"Addon Code Update Available: v{remote_code_clean}"
                 elif needs_asset_update:
                     msg = f"Asset Library Update Available: {remote_tag}"
                 else:
-                    msg = f"Up to date ({remote_tag})"
+                    msg = f"Up to date (v{code_clean})"
 
                 prefs.asset_status = msg
                 self.report({'INFO'}, msg)
