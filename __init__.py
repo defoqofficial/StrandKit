@@ -1,7 +1,7 @@
 bl_info = {
     "name": "StrandKit | The Hair, Fur & Dynamics Library",
     "author": "Nino Defoq",
-    "version": (1, 0, 8),
+    "version": (1, 0, 9),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps.",
@@ -30,6 +30,19 @@ from bpy.props import (
 # ------------------------------------------------------------------------
 # Preferences
 # ------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------
+# Preferences
+# ------------------------------------------------------------------------
+
+# Callback function to force-save preferences when changed from the sidebar panel
+def _strandkit_update_preferences(self, context):
+    try:
+        import bpy
+        bpy.ops.wm.save_userpref()
+    except Exception as e:
+        print(f"[StrandKit] Failed to auto-save preferences: {e}")
+
 
 class StrandKitPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
@@ -87,6 +100,7 @@ class StrandKitPreferences(bpy.types.AddonPreferences):
         description="Where the .blend + .txt assets live",
         subtype='DIR_PATH',
         default="//strandkit_assets/",
+        update=_strandkit_update_preferences,  # <--- Forces an instant write to your user preferences file
     )
     asset_remote_tag: StringProperty(
         name="Latest Tag",
@@ -142,11 +156,42 @@ class HairCardSwitcherProperties(bpy.types.PropertyGroup):
         options     = {'HIDDEN'}
     )
     
-    material: PointerProperty(
-        name="Material",
-        type=bpy.types.Material,
-        description="Select the material to update textures in"
+    # Dynamic callback to automatically find available materials
+    def get_available_materials(self, context):
+        items = []
+        
+        # 1. First, grab materials assigned to the active selected object
+        if context.active_object and context.active_object.type == 'MESH':
+            for slot in context.active_object.material_slots:
+                if slot.material:
+                    items.append((slot.material.name, slot.material.name, "Assigned to selected object"))
+        
+        # 2. Next, scan the whole project file for any "Mesh Card" materials 
+        for mat in bpy.data.materials:
+            if "Mesh Card" in mat.name:
+                items.append((mat.name, mat.name, "Found in project file"))
+        
+        # Remove duplicates while keeping order
+        unique_items = []
+        seen = set()
+        for name, label, desc in items:
+            if name not in seen:
+                unique_items.append((name, label, desc))
+                seen.add(name)
+        
+        # 3. IF NOT THERE YET: Return a placeholder option
+        if not unique_items:
+            return [("NONE", "No Material Found (Drag Asset In)", "Please drag your hair asset into the scene first")]
+            
+        return unique_items
+
+    # Replace the old 'material' PointerProperty with this EnumProperty
+    material_enum: EnumProperty(
+        name="Target Material",
+        description="Select the material to swap textures on",
+        items=get_available_materials
     )
+    
     base_path: StringProperty(
         name="Hair Card Folder",
         subtype='DIR_PATH'
@@ -293,8 +338,25 @@ class HAIRCARD_PT_Switcher(bpy.types.Panel):
                         if props.thickness != "NONE":
                             col.prop(props, "density")
                 col.separator()
-                col.prop(props, "material")
-                col.operator("haircard.swap_textures", icon='FILE_REFRESH')
+                
+                # Draw our new dropdown menu
+                col.prop(props, "material_enum")
+                
+                # Check if the material is missing/not there yet
+                if props.material_enum == "NONE":
+                    col.separator()
+                    # Show a warning box to guide the user
+                    warn = col.box()
+                    warn.label(text="Hair material not detected in scene.", icon='ERROR')
+                    warn.label(text="Please drag your asset in first!", icon='INFO')
+                    
+                    # Disable the swap button so they can't click it
+                    sub_row = col.row()
+                    sub_row.enabled = False
+                    sub_row.operator("haircard.swap_textures", icon='FILE_REFRESH')
+                else:
+                    # Material is there! Keep the button active
+                    col.operator("haircard.swap_textures", icon='FILE_REFRESH')
 
         # --- Baking (DISABLED FOR NOW) ---
         # box = layout.box()
@@ -345,6 +407,24 @@ class HAIRCARD_OT_SwapTextures(bpy.types.Operator):
                 self.report({'ERROR'}, "Path does not exist")
                 return {'CANCELLED'}
 
+            if props.material_enum == 'NONE':
+                self.report({'ERROR'}, "No valid hair material found to swap textures on.")
+                return {'CANCELLED'}
+
+            mat = bpy.data.materials.get(props.material_enum)
+            
+            if not mat:
+                self.report({'ERROR'}, "Selected material could not be found.")
+                return {'CANCELLED'}
+
+            # FIXED: Safely convert to a local block AND re-assign the variable
+            if mat.library:
+                mat = mat.make_local()
+            
+            if not mat.use_nodes:
+                self.report({'ERROR'}, "Selected material does not use nodes.")
+                return {'CANCELLED'}
+            
             # Map actual files in the folder to our expected keys
             for f in os.listdir(folder):
                 for k in expected:
@@ -352,18 +432,10 @@ class HAIRCARD_OT_SwapTextures(bpy.types.Operator):
                         expected[k] = os.path.join(folder, f)
                         break
             
-            mat = props.material
-            if not mat or not mat.use_nodes:
-                self.report({'ERROR'}, "No valid material selected.")
-                return {'CANCELLED'}
-            
             cnt = 0
             for node in mat.node_tree.nodes:
                 if node.type == 'TEX_IMAGE':
-                    # Check label first, fallback to name, make lowercase for safe matching
                     node_id = (node.label or node.name).lower()
-                    
-                    # Find which 'expected' key matches this node's ID
                     matched_key = next((k for k in expected if k.lower() in node_id), None)
                     
                     if matched_key:
@@ -372,10 +444,8 @@ class HAIRCARD_OT_SwapTextures(bpy.types.Operator):
                             try:
                                 node.image = bpy.data.images.load(fp, check_existing=True)
                                 
-                                # Set colorspace
                                 if matched_key == 'Diffuse':
                                      node.image.colorspace_settings.name = 'sRGB'
-                                     # Update bake dimensions based on diffuse map
                                      props.bake_width, props.bake_height = node.image.size
                                 else:
                                      node.image.colorspace_settings.name = 'Non-Color'
@@ -383,6 +453,10 @@ class HAIRCARD_OT_SwapTextures(bpy.types.Operator):
                                 cnt += 1
                             except Exception as e:
                                 self.report({'WARNING'}, f"Failed to load {fp}: {e}")
+            
+            # FIX: Explicitly notify the depsgraph that this material changed 
+            # so the viewport updates cleanly without using stale caches.
+            mat.update_tag()
             
             self.report({'INFO'}, f"Swapped {cnt} textures.")
             return {'FINISHED'}
