@@ -261,33 +261,30 @@ class STRANDKIT_OT_check_assets(bpy.types.Operator):
                 print(f"[StrandKit] Installed Assets: {asset_clean}")
                 print(f"[StrandKit] Installed Code:   {code_clean}")
 
-                # --- FETCH REMOTE CODE VERSION FROM __init__.py on main branch ---
-                remote_code_tuple = None
+                # --- NEW: FETCH TRUE REMOTE CODE VERSION FROM __init__.py ---
+                remote_code_tuple = code_tuple
                 chosen_branch = "main"
-
-                url = f"https://raw.githubusercontent.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/main/__init__.py"
-                req = urllib.request.Request(url)
-                if token:
-                    req.add_header("Authorization", f"token {token}")
-                try:
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        raw = resp.read().decode('utf-8')
-                        import re
-                        match = re.search(r'"version"\s*:\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', raw)
-                        if match:
-                            remote_code_tuple = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-                        else:
-                            print("[StrandKit] WARNING: Could not parse version from remote __init__.py")
-                except Exception as fetch_err:
-                    print(f"[StrandKit] WARNING: Failed to fetch remote __init__.py: {fetch_err}")
-
-                if remote_code_tuple is None:
-                    # Fall back: treat remote as same as local so we don't falsely flag an update
-                    remote_code_tuple = code_tuple
-                    print("[StrandKit] WARNING: Using local version as fallback for remote code version")
+                
+                for branch in ["main", "master"]:
+                    url = f"https://raw.githubusercontent.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/{branch}/__init__.py"
+                    req = urllib.request.Request(url)
+                    if token:
+                        req.add_header("Authorization", f"token {token}")
+                    try:
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            content = resp.read().decode('utf-8')
+                            import re
+                            # Regex to match the tuple inside "version": (x, y, z)
+                            match = re.search(r'"version"\s*:\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', content)
+                            if match:
+                                remote_code_tuple = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                                chosen_branch = branch
+                                break
+                    except Exception:
+                        continue
 
                 remote_code_clean = ".".join(map(str, remote_code_tuple))
-                print(f"[StrandKit] Remote Code Version: {remote_code_clean} (branch: {chosen_branch})")
+                print(f"[StrandKit] Remote Code Version: {remote_code_clean} (via branch: {chosen_branch})")
 
                 # 4. Compare
                 needs_asset_update = (remote_clean != asset_clean)
@@ -386,7 +383,7 @@ class STRANDKIT_OT_download_assets_progress(bpy.types.Operator):
             if self._phase == 0:
                 try:
                     token = self.github_token.strip()
-                    # Use our smart filtered function instead of the hardcoded URL!
+                    # THIS IS THE FIX: Use your filtered helper function, not the hardcoded URL
                     release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
 
                     tag = release.get("tag_name", "")
@@ -399,7 +396,7 @@ class STRANDKIT_OT_download_assets_progress(bpy.types.Operator):
                     self._total = sum(a.get("size", 0) for a in self._assets)
 
                     if not self._assets:
-                        self.report({'WARNING'}, "No .blend/.txt assets found")
+                        self.report({'WARNING'}, "No assets found for the latest release")
                         wm.event_timer_remove(self._timer)
                         return {'CANCELLED'}
 
@@ -1618,7 +1615,7 @@ def skip_tag_function(self, tag):
     if self.invalid_updater:
         return False
 
-    # IGNORE any tags meant for Humble Bundle
+    # MAIN BRANCH: Strictly skip any release with -hb
     if "-hb" in tag["name"].lower():
         return True 
 
@@ -1812,7 +1809,7 @@ def register(bl_info):
     # Note: updater.include_branch_list defaults to ['master'] branch if set to
     # none. Example targeting another multiple branches allowed to pull from:
     # updater.include_branch_list = ['master', 'dev']
-    updater.include_branch_list = None  # None is the equivalent = ['master']
+    updater.include_branch_list = ['main']  # None is the equivalent = ['master']
 
     # Only allow manual install, thus prompting the user to open
     # the addon's web page to download, specifically: updater.website
