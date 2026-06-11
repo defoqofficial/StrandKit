@@ -19,7 +19,7 @@
 bl_info = {
     "name": "StrandKit | The Hair, Fur & Dynamics Library",
     "author": "Nino Defoq",
-    "version": (1, 1, 4),
+    "version": (1, 1, 5),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > StrandKit",
     "description": "Switches hair card textures based on folder structure and bakes maps.",
@@ -230,20 +230,27 @@ class HairCardSwitcherProperties(bpy.types.PropertyGroup):
         description="Directory to save baked textures"
     )
     
+    # Level 1 – hair type folder (e.g. HairCards_1A_Straight)
     def get_hair_types(self, context):
-        return [(d, d, "") for d in list_dirs(bpy.path.abspath(self.base_path))] or [("NONE","No Types","")]
+        return [(d, d, "") for d in list_dirs(bpy.path.abspath(self.base_path))] or [("NONE","No Hair Types","")]
+
+    # Level 2 – color folder (e.g. Blonde)
     def get_colors(self, context):
         try:
             p = os.path.join(bpy.path.abspath(self.base_path), self.hair_type)
             return [(d, d, "") for d in list_dirs(p)] or [("NONE","No Colors","")]
         except:
             return [("NONE","Invalid","")]
+
+    # Level 3 – thickness folder (e.g. T3.0)
     def get_thicknesses(self, context):
         try:
             p = os.path.join(bpy.path.abspath(self.base_path), self.hair_type, self.color)
-            return [(d, d, "") for d in list_dirs(p)] or [("NONE","No Thickness","")]
+            return [(d, d, "") for d in list_dirs(p)] or [("NONE","No Thicknesses","")]
         except:
             return [("NONE","Invalid","")]
+
+    # Level 4 – density folder (e.g. D100)
     def get_densities(self, context):
         try:
             p = os.path.join(bpy.path.abspath(self.base_path), self.hair_type, self.color, self.thickness)
@@ -251,10 +258,10 @@ class HairCardSwitcherProperties(bpy.types.PropertyGroup):
         except:
             return [("NONE","Invalid","")]
 
-    hair_type: EnumProperty(name="Hair Type", items=get_hair_types)
-    color: EnumProperty(name="Color", items=get_colors)
-    thickness: EnumProperty(name="Thickness", items=get_thicknesses)
-    density: EnumProperty(name="Density", items=get_densities)
+    hair_type:  EnumProperty(name="Hair Type",  items=get_hair_types)
+    color:      EnumProperty(name="Color",       items=get_colors)
+    thickness:  EnumProperty(name="Thickness",   items=get_thicknesses)
+    density:    EnumProperty(name="Density",     items=get_densities)
 
 # ------------------------------------------------------------------------
 # UI Panel
@@ -414,70 +421,94 @@ def verify_asset_library():
 class HAIRCARD_OT_SwapTextures(bpy.types.Operator):
     bl_idname = "haircard.swap_textures"
     bl_label = "Swap Hair Card Textures"
-    bl_description = "Swap textures based on selected folders and detect bake size"
+    bl_description = "Swap textures based on selected folders"
 
     def execute(self, context):
-            props = context.scene.haircard_switcher
-            folder = os.path.join(bpy.path.abspath(props.base_path), props.hair_type, props.color, props.thickness, props.density)
-            expected = {t:None for t in ["Diffuse","Roughness","Specular","Normal","Depth","Startmask"]}
-            
-            if not os.path.exists(folder):
-                self.report({'ERROR'}, "Path does not exist")
-                return {'CANCELLED'}
+        props = context.scene.haircard_switcher
 
-            if props.material_enum == 'NONE':
-                self.report({'ERROR'}, "No valid hair material found to swap textures on.")
-                return {'CANCELLED'}
+        # Build path: library / hair_type / color / thickness / density
+        target_folder = os.path.normpath(os.path.join(
+            bpy.path.abspath(props.base_path),
+            props.hair_type,
+            props.color,
+            props.thickness,
+            props.density,
+        ))
 
-            mat = bpy.data.materials.get(props.material_enum)
-            
-            if not mat:
-                self.report({'ERROR'}, "Selected material could not be found.")
-                return {'CANCELLED'}
+        print(f"\n[StrandKit] Looking for textures in: {target_folder}")
 
-            # FIXED: Safely convert to a local block AND re-assign the variable
-            if mat.library:
-                mat = mat.make_local()
-            
-            if not mat.use_nodes:
-                self.report({'ERROR'}, "Selected material does not use nodes.")
-                return {'CANCELLED'}
-            
-            # Map actual files in the folder to our expected keys
-            for f in os.listdir(folder):
-                for k in expected:
-                    if k.lower() in f.lower():
-                        expected[k] = os.path.join(folder, f)
-                        break
-            
-            cnt = 0
-            for node in mat.node_tree.nodes:
-                if node.type == 'TEX_IMAGE':
-                    node_id = (node.label or node.name).lower()
-                    matched_key = next((k for k in expected if k.lower() in node_id), None)
-                    
-                    if matched_key:
-                        fp = expected[matched_key]
+        keywords = {
+            "Diffuse":   ["diffuse", "albedo", "color", "basecolor", "col"],
+            "Roughness": ["roughness", "rough", "rgh"],
+            "Specular":  ["specular", "spec", "spc"],
+            "Normal":    ["normal", "nrm", "nor"],
+            "Depth":     ["depth", "height", "disp"],
+            "Startmask": ["startmask", "mask", "root", "alpha"]
+        }
+
+        found_files = {k: None for k in keywords.keys()}
+
+        if not os.path.exists(target_folder):
+            print(f"[StrandKit] ERROR: Folder not found: {target_folder}")
+            self.report({'ERROR'}, "Selected texture path does not exist.")
+            return {'CANCELLED'}
+
+        files_in_folder = os.listdir(target_folder)
+
+        for f in files_in_folder:
+            f_lower = f.lower()
+            for key, aliases in keywords.items():
+                if found_files[key] is None and any(alias in f_lower for alias in aliases):
+                    found_files[key] = os.path.join(target_folder, f)
+
+        # Fallback: if filenames have no map-type keywords (e.g. pure density files like
+        # T1_D100.png), assign the first matched density file to Diffuse so the swap
+        # still does something useful.
+        if not any(found_files.values()) and files_in_folder:
+            found_files["Diffuse"] = os.path.join(target_folder, files_in_folder[0])
+            print(f"[StrandKit] No keyword match – falling back to Diffuse: {files_in_folder[0]}")
+
+        print(f"[StrandKit] Files matched: {found_files}")
+        
+        # Verify we found at least something
+        if not any(found_files.values()):
+            self.report({'WARNING'}, "No matching textures found. Check System Console for folder path.")
+            return {'CANCELLED'}
+
+        mat = bpy.data.materials.get(props.material_enum)
+        if not mat:
+            self.report({'ERROR'}, "Material not found.")
+            return {'CANCELLED'}
+
+        if mat.library:
+            mat = mat.make_local()
+        
+        cnt = 0
+        for node in mat.node_tree.nodes:
+            if node.type == 'TEX_IMAGE':
+                # Check node label, name, or the image name itself
+                node_id = (node.label or node.name or (node.image.name if node.image else "")).lower()
+                
+                # Check if this node matches one of our slots
+                for key, aliases in keywords.items():
+                    if any(alias in node_id for alias in aliases):
+                        fp = found_files.get(key)
+                        
                         if fp and os.path.exists(fp):
                             try:
                                 node.image = bpy.data.images.load(fp, check_existing=True)
-                                
-                                if matched_key == 'Diffuse':
-                                     node.image.colorspace_settings.name = 'sRGB'
-                                     props.bake_width, props.bake_height = node.image.size
+                                if key == 'Diffuse':
+                                    node.image.colorspace_settings.name = 'sRGB'
                                 else:
-                                     node.image.colorspace_settings.name = 'Non-Color'
-                                
+                                    node.image.colorspace_settings.name = 'Non-Color'
                                 cnt += 1
+                                print(f"[StrandKit] Swapped '{node_id}' with '{os.path.basename(fp)}'")
                             except Exception as e:
-                                self.report({'WARNING'}, f"Failed to load {fp}: {e}")
-            
-            # FIX: Explicitly notify the depsgraph that this material changed 
-            # so the viewport updates cleanly without using stale caches.
-            mat.update_tag()
-            
-            self.report({'INFO'}, f"Swapped {cnt} textures.")
-            return {'FINISHED'}
+                                print(f"[StrandKit] Failed to load {fp}: {e}")
+        
+        mat.update_tag()
+        self.report({'INFO'}, f"Successfully swapped {cnt} textures.")
+        return {'FINISHED'}
     
 class HAIRCARD_OT_BakeTextures(bpy.types.Operator):
     bl_idname = "haircard.bake_textures"
@@ -750,7 +781,3 @@ def unregister():
     for c in reversed(classes): bpy.utils.unregister_class(c)
 
 if __name__=="__main__": register()
-
-
-
-
