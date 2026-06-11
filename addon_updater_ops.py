@@ -140,11 +140,11 @@ def get_latest_release(owner: str, repo: str, token: str = "") -> dict:
     try:
         with urllib.request.urlopen(req) as resp:
             releases = json.load(resp)
-            # Find the first release that is NOT for Humble Bundle
+            # Find the first Humble Bundle release (-hb tag)
             for r in releases:
-                if "-hb" not in r.get("tag_name", "").lower():
+                if "-hb" in r.get("tag_name", "").lower():
                     return r
-            raise RuntimeError("No standard release found on GitHub.")
+            raise RuntimeError("No Humble Bundle release found on GitHub.")
     except urllib.error.HTTPError as e:
         if e.code == 403:
             raise RuntimeError("GitHub rate limit exceeded.")
@@ -229,10 +229,6 @@ class STRANDKIT_OT_update_all(bpy.types.Operator):
 
         return {'FINISHED'}
                 
-# Module-level cache: (timestamp, remote_code_tuple, remote_tag)
-_check_cache = {"time": 0, "remote_code_tuple": None, "remote_tag": None}
-_CHECK_CACHE_TTL = 300  # seconds before a real re-fetch is allowed
-
 class STRANDKIT_OT_check_assets(bpy.types.Operator):
     """Check GitHub for updates (compares both Code and Assets)"""
     bl_idname = "strandkit.check_assets"
@@ -240,85 +236,58 @@ class STRANDKIT_OT_check_assets(bpy.types.Operator):
     bl_options = {'REGISTER', 'INTERNAL'}
 
     def execute(self, context):
-            import time
             prefs = context.preferences.addons[__package__].preferences
             try:
                 print("\n[StrandKit] Checking for updates...")
                 token = prefs.github_token.strip()
-
-                now = time.monotonic()
-                cache_age = now - _check_cache["time"]
-                use_cache = (
-                    cache_age < _CHECK_CACHE_TTL
-                    and _check_cache["remote_tag"] is not None
-                    and _check_cache["remote_code_tuple"] is not None
-                )
-
-                if use_cache:
-                    print(f"[StrandKit] Using cached result ({int(cache_age)}s old, TTL {_CHECK_CACHE_TTL}s)")
-                    remote_tag        = _check_cache["remote_tag"]
-                    remote_code_tuple = _check_cache["remote_code_tuple"]
-                    prefs.asset_remote_tag = remote_tag
-                else:
-                    if not token:
-                        print("[StrandKit] WARNING: No GitHub token set — unauthenticated requests are rate-limited (60/hr). Add a token in addon preferences.")
-
+                
                 # 1. Fetch latest release from GitHub (strictly for Assets)
-                if not use_cache:
-                    release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
-                    remote_tag = release.get("tag_name", "v0.0.0")
-                    prefs.asset_remote_tag = remote_tag
-                    print(f"[StrandKit] GitHub Asset Tag: {remote_tag}")
+                release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
+                remote_tag = release.get("tag_name", "v0.0.0")
+                prefs.asset_remote_tag = remote_tag
+
+                print(f"[StrandKit] GitHub Asset Tag: {remote_tag}")
                 
                 # 2. Prepare versions for comparison
                 remote_clean = remote_tag.lower().lstrip("v").strip()
-                # Strip "-hb" suffix before comparing asset versions
-                asset_clean  = prefs.asset_last_tag.lower().lstrip("v").replace("-hb", "").strip()
-                remote_clean_base = remote_clean.replace("-hb", "").strip()
-
-                # 3. Get local code version
+                asset_clean  = prefs.asset_last_tag.lower().lstrip("v").strip()
+                
+                # 3. Get Local Code Version safely
                 code_tuple = (0, 0, 0)
                 if hasattr(updater, "current_version") and updater.current_version:
                     code_tuple = updater.current_version
                 code_clean = ".".join(map(str, code_tuple))
-
+                
                 print(f"[StrandKit] Installed Assets: {asset_clean}")
                 print(f"[StrandKit] Installed Code:   {code_clean}")
 
-                # --- FETCH REMOTE CODE VERSION FROM humble-bundle/__init__.py ---
-                if not use_cache:
-                    remote_code_tuple = None
-                    chosen_branch = "humble-bundle"
-                    url = f"https://raw.githubusercontent.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/humble-bundle/__init__.py"
+                # --- NEW: FETCH TRUE REMOTE CODE VERSION FROM __init__.py ---
+                remote_code_tuple = code_tuple
+                chosen_branch = "main"
+                
+                for branch in ["main", "master"]:
+                    url = f"https://raw.githubusercontent.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/{branch}/__init__.py"
                     req = urllib.request.Request(url)
                     if token:
                         req.add_header("Authorization", f"token {token}")
                     try:
-                        with urllib.request.urlopen(req, timeout=10) as resp:
-                            raw = resp.read().decode('utf-8')
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            content = resp.read().decode('utf-8')
                             import re
-                            match = re.search(r'"version"\s*:\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', raw)
+                            # Regex to match the tuple inside "version": (x, y, z)
+                            match = re.search(r'"version"\s*:\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', content)
                             if match:
                                 remote_code_tuple = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-                            else:
-                                print("[StrandKit] WARNING: Could not parse version from remote humble-bundle/__init__.py")
-                    except Exception as fetch_err:
-                        print(f"[StrandKit] WARNING: Failed to fetch remote __init__.py: {fetch_err}")
-
-                    # Store in cache
-                    _check_cache["time"]              = now
-                    _check_cache["remote_tag"]        = remote_tag
-                    _check_cache["remote_code_tuple"] = remote_code_tuple
-
-                if remote_code_tuple is None:
-                    remote_code_tuple = code_tuple
-                    print("[StrandKit] WARNING: Using local version as fallback for remote code version")
+                                chosen_branch = branch
+                                break
+                    except Exception:
+                        continue
 
                 remote_code_clean = ".".join(map(str, remote_code_tuple))
-                print(f"[StrandKit] Remote Code Version: {remote_code_clean} (branch: humble-bundle)")
+                print(f"[StrandKit] Remote Code Version: {remote_code_clean} (via branch: {chosen_branch})")
 
                 # 4. Compare
-                needs_asset_update = (remote_clean_base != asset_clean)
+                needs_asset_update = (remote_clean != asset_clean)
                 needs_code_update  = (remote_code_tuple > code_tuple)
 
                 # --- MANAGE CODE UPDATE BUTTON STATE ---
@@ -1646,9 +1615,9 @@ def skip_tag_function(self, tag):
     if self.invalid_updater:
         return False
 
-    # IGNORE any tags meant for Humble Bundle
-    if "-hb" in tag["name"].lower():
-        return True 
+    # IGNORE any tags that are NOT Humble Bundle
+    if "-hb" not in tag["name"].lower():
+        return True
 
     tupled = self.version_tuple_from_text(tag["name"])
     if not isinstance(tupled, tuple):
