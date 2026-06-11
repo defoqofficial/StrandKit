@@ -382,19 +382,15 @@ class STRANDKIT_OT_download_assets_progress(bpy.types.Operator):
             # Phase 0: fetch release + build asset list
             if self._phase == 0:
                 try:
-                    url = f"https://api.github.com/repos/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/releases/latest"
-                    req = urllib.request.Request(url)
                     token = self.github_token.strip()
-                    if token:
-                        req.add_header("Authorization", f"token {token}")
-                    with urllib.request.urlopen(req) as resp:
-                        release = json.load(resp)
+                    # Use our smart filtered function instead of the hardcoded URL!
+                    release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
 
                     tag = release.get("tag_name", "")
                     prefs.asset_remote_tag = tag
 
                     self._assets = [
-                        a for a in release["assets"]
+                        a for a in release.get("assets", [])
                         if a["name"].lower().endswith((".blend", ".txt"))
                     ]
                     self._total = sum(a.get("size", 0) for a in self._assets)
@@ -459,7 +455,20 @@ class STRANDKIT_OT_download_assets_progress(bpy.types.Operator):
                 if self._total:
                     prefs.asset_download_progress = self._downloaded / self._total
                 else:
-                    prefs.asset_download_progress = 0.0
+                    wm.event_timer_remove(self._timer)
+                    prefs.downloaded_asset_files = ";".join([a["name"] for a in self._assets])
+                    prefs.asset_download_progress = 1.0
+                    prefs.asset_last_tag = prefs.asset_remote_tag
+                    prefs.asset_status = f"Up to date ({prefs.asset_last_tag})"
+                    self.report({'INFO'}, "All assets downloaded")
+                                
+                    # Force Blender to save the preferences so it doesn't forget!
+                    try:
+                        bpy.ops.wm.save_userpref()
+                    except:
+                        pass
+                                    
+                    return {'FINISHED'}
 
                 self._area.tag_redraw()
 
