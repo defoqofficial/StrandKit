@@ -133,20 +133,20 @@ STRANDKIT_OWNER = "defoqofficial"
 STRANDKIT_REPO  = "StrandKit"
 
 def get_latest_release(owner: str, repo: str, token: str = "") -> dict:
-    """
-    Fetch the latest GitHub release JSON for owner/repo.
-    If `token` is non-empty, authenticates to avoid rate-limit errors.
-    """
-    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases"
     req = urllib.request.Request(url)
     if token:
         req.add_header("Authorization", f"token {token.strip()}")
     try:
         with urllib.request.urlopen(req) as resp:
-            return json.load(resp)
+            releases = json.load(resp)
+            for r in releases:
+                if "-hb" in r.get("tag_name", "").lower():
+                    return r
+            raise RuntimeError("No Humble Bundle release found on GitHub.")
     except urllib.error.HTTPError as e:
         if e.code == 403:
-            raise RuntimeError("GitHub rate limit exceeded (use a personal access token).")
+            raise RuntimeError("GitHub rate limit exceeded.")
         raise
 
 def download_asset(asset_url: str, dest_path: str, token: str = "") -> bool:
@@ -264,7 +264,10 @@ class STRANDKIT_OT_check_assets(bpy.types.Operator):
                 remote_code_tuple = code_tuple
                 chosen_branch = "main"
                 
-                for branch in ["main", "master"]:
+                remote_code_tuple = code_tuple
+                chosen_branch = "humble-bundle"
+                
+                for branch in ["humble-bundle"]:
                     url = f"https://raw.githubusercontent.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/{branch}/__init__.py"
                     req = urllib.request.Request(url)
                     if token:
@@ -1602,58 +1605,25 @@ def update_settings_ui_condensed(self, context, element=None):
 
 
 def skip_tag_function(self, tag):
-    """A global function for tag skipping.
-
-    A way to filter which tags are displayed, e.g. to limit downgrading too
-    long ago.
-
-    Args:
-        self: The instance of the singleton addon update.
-        tag: the text content of a tag from the repo, e.g. "v1.2.3".
-
-    Returns:
-        bool: True to skip this tag name (ie don't allow for downloading this
-            version), or False if the tag is allowed.
-    """
-
-    # In case of error importing updater.
     if self.invalid_updater:
         return False
 
-    # ---- write any custom code here, return true to disallow version ---- #
-    #
-    # # Filter out e.g. if 'beta' is in name of release
-    # if 'beta' in tag.lower():
-    # 	return True
-    # ---- write any custom code above, return true to disallow version --- #
+    if "-hb" not in tag["name"].lower():
+        return True 
 
-    if self.include_branches:
-        for branch in self.include_branch_list:
-            if tag["name"].lower() == branch:
-                return False
-
-    # Function converting string to tuple, ignoring e.g. leading 'v'.
-    # Be aware that this strips out other text that you might otherwise
-    # want to be kept and accounted for when checking tags (e.g. v1.1a vs 1.1b)
     tupled = self.version_tuple_from_text(tag["name"])
     if not isinstance(tupled, tuple):
         return True
 
-    # Select the min tag version - change tuple accordingly.
     if self.version_min_update is not None:
         if tupled < self.version_min_update:
-            return True  # Skip if current version below this.
+            return True
 
-    # Select the max tag version.
     if self.version_max_update is not None:
         if tupled >= self.version_max_update:
-            return True  # Skip if current version at or above this.
+            return True
 
-    # In all other cases, allow showing the tag for updating/reverting.
-    # To simply and always show all tags, this return False could be moved
-    # to the start of the function definition so all tags are allowed.
     return False
-
 
 def select_link_function(self, tag):
     """Only customize if trying to leverage "attachments" in *GitHub* releases.
