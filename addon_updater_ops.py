@@ -1692,38 +1692,19 @@ def register(bl_info):
         return
     updater.clear_state()  # Clear internal vars, avoids reloading oddities.
 
-    # Confirm your updater "engine" (Github is default if not specified).
     updater.engine = "Github"
-    # updater.engine = "GitLab"
-    # updater.engine = "Bitbucket"
-
-    # If using private repository, indicate the token here.
-    # Must be set after assigning the engine.
-    # **WARNING** Depending on the engine, this token can act like a password!!
-    # Only provide a token if the project is *non-public*, see readme for
-    # other considerations and suggestions from a security standpoint.
-    updater.private_token = None  # "tokenstring"
-
-    # Choose your own username, must match website (not needed for GitLab).
     updater.user = "defoqofficial"
-
-    # Choose your own repository, must match git name for GitHUb and Bitbucket,
-    # for GitLab use project ID (numbers only).
     updater.repo = "StrandKit"
-
-    # updater.addon = # define at top of module, MUST be done first
-
-    # Website for manual addon download, optional but recommended to set.
     updater.website = "https://github.com/defoqofficial/StrandKit"
+    
+    # 1. This tells the updater to look at the branch you specify below
+    updater.include_branches = True
+    
+    # 2. IMPORTANT: Force it to ONLY look at the humble-bundle branch for the .py check
+    updater.include_branch_list = ['humble-bundle']
 
-    # Addon subfolder path.
-    # "sample/path/to/addon"
-    # default is "" or None, meaning root
-    updater.subfolder_path = ""
-
-    # Used to check/compare versions.
+    # 3. This registers the version so the updater knows what it's comparing against
     updater.current_version = bl_info["version"]
-
     # Optional, to hard-set update frequency, use this here - however, this
     # demo has this set via UI properties.
     # updater.set_check_interval(enabled=False, months=0, days=0, hours=0, minutes=2)
