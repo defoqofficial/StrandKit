@@ -261,11 +261,13 @@ class STRANDKIT_OT_check_assets(bpy.types.Operator):
                 print(f"[StrandKit] Installed Assets: {asset_clean}")
                 print(f"[StrandKit] Installed Code:   {code_clean}")
 
-                # --- NEW: FETCH TRUE REMOTE CODE VERSION FROM __init__.py ---
+
+                # --- LOCK TO HUMBLE BUNDLE BRANCH ---
                 remote_code_tuple = code_tuple
-                chosen_branch = "main"
+                chosen_branch = "humble-bundle"
                 
-                for branch in ["main", "master"]:
+                # Only ever check the humble-bundle branch for code
+                for branch in ["humble-bundle"]:
                     url = f"https://raw.githubusercontent.com/{STRANDKIT_OWNER}/{STRANDKIT_REPO}/{branch}/__init__.py"
                     req = urllib.request.Request(url)
                     if token:
@@ -278,8 +280,7 @@ class STRANDKIT_OT_check_assets(bpy.types.Operator):
                             match = re.search(r'"version"\s*:\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', content)
                             if match:
                                 remote_code_tuple = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-                                chosen_branch = branch
-                                break
+                                break # Found the version, stop checking
                     except Exception:
                         continue
 
@@ -380,11 +381,13 @@ class STRANDKIT_OT_download_assets_progress(bpy.types.Operator):
 
         if event.type == 'TIMER':
             # Phase 0: fetch release + build asset list
+            # Phase 0: fetch release + build asset list
             if self._phase == 0:
                 try:
                     token = self.github_token.strip()
-                    # Use our smart filtered function instead of the hardcoded URL!
+                    # Use your new filtered get_latest_release function here!
                     release = get_latest_release(STRANDKIT_OWNER, STRANDKIT_REPO, token)
+                    # ... rest of your code ...
 
                     tag = release.get("tag_name", "")
                     prefs.asset_remote_tag = tag
