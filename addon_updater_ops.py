@@ -32,6 +32,14 @@ from bpy.props import StringProperty, FloatProperty
 import gpu
 from gpu.types import GPUVertFormat, GPUVertBuf
 from gpu.shader import from_builtin
+import ssl
+
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
 
 # Safely import the updater.
 try:
